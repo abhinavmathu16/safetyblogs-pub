@@ -1,0 +1,4 @@
+project_id = "hzveuxwqmyzdtzkxffol"
+
+[functions.ts-research]
+verify_jwt = false
