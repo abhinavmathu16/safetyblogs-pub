@@ -2,9 +2,28 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { findPapers } from "@/lib/api/ts-research";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+
+const TOPICS = [
+  { value: "content-moderation", label: "Content Moderation" },
+  { value: "misinformation", label: "Misinformation & Disinformation" },
+  { value: "deepfakes", label: "Deepfakes & Synthetic Media" },
+  { value: "election-integrity", label: "Election Integrity" },
+  { value: "platform-governance", label: "Platform Governance & Policy" },
+  { value: "child-safety", label: "Online Child Safety" },
+  { value: "hate-speech", label: "Hate Speech & Extremism" },
+  { value: "algorithmic-bias", label: "Algorithmic Bias & Fairness" },
+  { value: "transparency", label: "Transparency & Reporting" },
+  { value: "harassment", label: "Online Harassment & Abuse" },
+  { value: "ai-safety", label: "AI Safety & Risk Management" },
+  { value: "privacy", label: "Privacy & Data Protection" },
+  { value: "polarization", label: "Political Polarization" },
+  { value: "radicalization", label: "Radicalization & Terrorism" },
+  { value: "user-wellbeing", label: "User Wellbeing & Mental Health" },
+];
 
 export interface Paper {
   title: string;
@@ -21,10 +40,13 @@ interface PaperFinderProps {
 }
 
 export const PaperFinder = ({ sourceName, onSelect, onBack }: PaperFinderProps) => {
-  const [topic, setTopic] = useState("");
+  const [selectedTopic, setSelectedTopic] = useState("");
+  const [customTopic, setCustomTopic] = useState("");
   const [loading, setLoading] = useState(false);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [rawText, setRawText] = useState("");
+
+  const effectiveTopic = selectedTopic === "custom" ? customTopic : (TOPICS.find(t => t.value === selectedTopic)?.label || "");
 
   const handleSearch = async () => {
     setLoading(true);
@@ -34,7 +56,7 @@ export const PaperFinder = ({ sourceName, onSelect, onBack }: PaperFinderProps) 
     let accumulated = "";
 
     try {
-      await findPapers(sourceName, topic, {
+      await findPapers(sourceName, effectiveTopic, {
         onDelta: (text) => {
           accumulated += text;
           setRawText(accumulated);
@@ -72,25 +94,45 @@ export const PaperFinder = ({ sourceName, onSelect, onBack }: PaperFinderProps) 
         </p>
         <h2 className="text-3xl font-display font-bold mb-2">Find a Paper</h2>
         <p className="text-muted-foreground font-body">
-          Optionally narrow your search with a topic, or search broadly.
+          Select a topic to discover relevant papers.
         </p>
       </div>
 
-      <div className="flex gap-3 max-w-xl mx-auto mb-8">
-        <Input
-          placeholder="e.g. content moderation, deepfakes, election integrity..."
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          className="font-body"
-        />
+      <div className="max-w-xl mx-auto mb-8 space-y-3">
+        <Select value={selectedTopic} onValueChange={setSelectedTopic}>
+          <SelectTrigger className="font-body">
+            <SelectValue placeholder="Choose a topic..." />
+          </SelectTrigger>
+          <SelectContent>
+            {TOPICS.map((t) => (
+              <SelectItem key={t.value} value={t.value} className="font-body">
+                {t.label}
+              </SelectItem>
+            ))}
+            <SelectItem value="custom" className="font-body font-semibold">
+              ✏️ Custom topic...
+            </SelectItem>
+          </SelectContent>
+        </Select>
+
+        {selectedTopic === "custom" && (
+          <Input
+            placeholder="Type your custom topic..."
+            value={customTopic}
+            onChange={(e) => setCustomTopic(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            className="font-body"
+            autoFocus
+          />
+        )}
+
         <Button
           variant="editorial"
           onClick={handleSearch}
-          disabled={loading}
-          className="min-w-[120px]"
+          disabled={loading || (!selectedTopic || (selectedTopic === "custom" && !customTopic.trim()))}
+          className="w-full"
         >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Search"}
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Search Papers"}
         </Button>
       </div>
 
