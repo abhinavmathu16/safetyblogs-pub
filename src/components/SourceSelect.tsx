@@ -56,6 +56,36 @@ const SOURCES = [
     org: "ACM",
     description: "Top-tier academic conference on algorithmic safety, fairness, and bias.",
   },
+  {
+    id: "usenix",
+    name: "USENIX Security Symposium",
+    org: "USENIX Association",
+    description: "Premier academic venue for bot detection, web security, and anti-scraping research.",
+  },
+  {
+    id: "ieee-sp",
+    name: "IEEE Symposium on Security & Privacy",
+    org: "IEEE",
+    description: "Leading conference on network security, fingerprinting, and automated traffic analysis.",
+  },
+  {
+    id: "ccs",
+    name: "ACM CCS Conference",
+    org: "ACM",
+    description: "Research on web automation detection, CAPTCHA systems, and adversarial bot mitigation.",
+  },
+  {
+    id: "ndss",
+    name: "NDSS Symposium",
+    org: "Internet Society",
+    description: "Network and Distributed System Security — browser fingerprinting and scraping countermeasures.",
+  },
+  {
+    id: "bot-research",
+    name: "Bot Detection & Mitigation Research",
+    org: "Cloudflare / F5 / HUMAN",
+    description: "Industry research on bot management, device fingerprinting, and web scraping defense.",
+  },
 ];
 
 interface SourceSelectProps {
