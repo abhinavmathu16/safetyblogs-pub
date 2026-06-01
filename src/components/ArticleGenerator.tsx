@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { generateArticle } from "@/lib/api/ts-research";
-import { Loader2, RotateCcw } from "lucide-react";
+import { ExternalLink, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import type { Paper } from "@/components/PaperFinder";
 
@@ -49,6 +49,16 @@ export const ArticleGenerator = ({ paper, review, userThoughts, onRestart }: Art
         <p className="text-muted-foreground font-body">
           Based on "{paper.title}" and your insights.
         </p>
+        {paper.url && (
+          <a
+            href={paper.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 mt-2 text-xs font-mono text-accent hover:underline"
+          >
+            View original paper <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
       </div>
 
       <motion.div

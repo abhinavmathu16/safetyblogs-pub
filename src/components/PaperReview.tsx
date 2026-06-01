@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { reviewPaper } from "@/lib/api/ts-research";
-import { Loader2 } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Paper } from "@/components/PaperFinder";
 
@@ -46,6 +46,16 @@ export const PaperReview = ({ paper, onContinue, onBack }: PaperReviewProps) => 
         <p className="text-muted-foreground font-body">
           {paper.authors} · {paper.year}
         </p>
+        {paper.url && (
+          <a
+            href={paper.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 mt-2 text-xs font-mono text-accent hover:underline"
+          >
+            View original paper <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
       </div>
 
       <div className="bg-card border-2 border-border rounded-lg p-8">
