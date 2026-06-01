@@ -14,7 +14,7 @@ type FetchConfig =
   | { type: "firecrawl"; url: string; limit?: number };
 
 const SOURCE_FETCH: Record<string, FetchConfig> = {
-  jots: { type: "firecrawl", url: "https://tsjournal.org/index.php/jots/issue/archive", limit: 20 },
+  jots: { type: "firecrawl", url: "https://tsjournal.org/index.php/jots/issue/current", limit: 20 },
   tspa: { type: "firecrawl", url: "https://www.tspa.org/library/", limit: 20 },
   arxiv: { type: "arxiv", categories: ["cs.CY", "cs.HC", "cs.CR"] },
   stanford: { type: "firecrawl", url: "https://cyber.fsi.stanford.edu/io/publications", limit: 20 },
@@ -69,13 +69,91 @@ async function fetchArxiv(categories: string[], topic: string): Promise<RawPaper
 }
 
 // ───────── Firecrawl ─────────
+const PAPER_SCHEMA = {
+  type: "object",
+  properties: {
+    papers: {
+      type: "array",
+      description:
+        "List of individual research papers, articles, or publications listed on this page. Do NOT include navigation links, issues, volumes, or section headings — only actual papers with a title and (ideally) author byline.",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Full paper title" },
+          authors: { type: "string", description: "Comma-separated author names exactly as shown on the page. Leave empty if not shown." },
+          year: { type: "string", description: "Publication year if visible (e.g. 2024)" },
+          url: { type: "string", description: "Absolute URL to the paper's landing page or PDF" },
+          abstract: { type: "string", description: "Abstract or short description if shown on the page" },
+        },
+        required: ["title"],
+      },
+    },
+  },
+  required: ["papers"],
+};
+
 async function fetchFirecrawl(targetUrl: string, topic: string, limit = 20): Promise<RawPaper[]> {
   const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
   if (!apiKey) {
     throw new Error("FIRECRAWL_NOT_CONFIGURED");
   }
 
-  // Scrape the publications index page as markdown + links
+  // 1) Try structured JSON extraction first — captures authors/year/abstract.
+  let structured: RawPaper[] = [];
+  try {
+    const jsonResp = await fetch("https://api.firecrawl.dev/v2/scrape", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: targetUrl,
+        formats: [
+          { type: "json", schema: PAPER_SCHEMA, prompt: "Extract every individual research paper or article listed on this page with title, authors, year, absolute URL, and abstract when available. Skip navigation, issue/volume listings, and section headers." },
+          "markdown",
+        ],
+        onlyMainContent: true,
+      }),
+    });
+
+    if (jsonResp.ok) {
+      const jsonData = await jsonResp.json();
+      const extracted =
+        jsonData.data?.json?.papers ||
+        jsonData.json?.papers ||
+        jsonData.data?.extract?.papers ||
+        [];
+      if (Array.isArray(extracted)) {
+        structured = extracted
+          .filter((p: any) => p && typeof p.title === "string" && p.title.trim().length > 5)
+          .map((p: any): RawPaper => ({
+            title: String(p.title).trim(),
+            authors: p.authors ? String(p.authors).trim() : undefined,
+            year: p.year ? String(p.year).trim() : undefined,
+            url: p.url ? String(p.url).trim() : undefined,
+            abstract: p.abstract ? String(p.abstract).trim() : undefined,
+          }));
+      }
+
+      // If structured extraction worked, rank by topic and return.
+      if (structured.length > 0) {
+        return rankByTopic(structured, topic, limit);
+      }
+
+      // Otherwise, fall through to markdown-link fallback using same response.
+      const markdown: string = jsonData.data?.markdown || jsonData.markdown || "";
+      const fromMarkdown = extractFromMarkdown(markdown, limit);
+      if (fromMarkdown.length > 0) return rankByTopic(fromMarkdown, topic, limit);
+    } else {
+      const t = await jsonResp.text();
+      console.error("Firecrawl json scrape failed:", jsonResp.status, t);
+    }
+  } catch (e) {
+    console.error("Firecrawl json extraction error:", e);
+  }
+
+  // 2) Fallback: plain markdown scrape + link regex (legacy behavior).
   const resp = await fetch("https://api.firecrawl.dev/v2/scrape", {
     method: "POST",
     headers: {
@@ -84,21 +162,20 @@ async function fetchFirecrawl(targetUrl: string, topic: string, limit = 20): Pro
     },
     body: JSON.stringify({
       url: targetUrl,
-      formats: ["markdown", "links"],
+      formats: ["markdown"],
       onlyMainContent: true,
     }),
   });
-
   if (!resp.ok) {
     const t = await resp.text();
     throw new Error(`Firecrawl scrape failed: ${resp.status} ${t}`);
   }
-
   const data = await resp.json();
   const markdown: string = data.data?.markdown || data.markdown || "";
-  const links: string[] = data.data?.links || data.links || [];
+  return rankByTopic(extractFromMarkdown(markdown, limit), topic, limit);
+}
 
-  // Extract candidate paper-like lines: markdown links [Title](url)
+function extractFromMarkdown(markdown: string, limit: number): RawPaper[] {
   const linkRe = /\[([^\]]{15,300})\]\((https?:\/\/[^\s)]+)\)/g;
   const candidates: RawPaper[] = [];
   let m: RegExpExecArray | null;
@@ -109,11 +186,14 @@ async function fetchFirecrawl(targetUrl: string, topic: string, limit = 20): Pro
     candidates.push({ title, url });
     if (candidates.length >= limit * 2) break;
   }
+  return candidates;
+}
 
-  // If topic given, prefer ones containing topic words; otherwise keep first N
+function rankByTopic(papers: RawPaper[], topic: string, limit: number): RawPaper[] {
   const topicWords = topic.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-  const scored = candidates.map((c) => {
-    const t = c.title.toLowerCase();
+  if (topicWords.length === 0) return papers.slice(0, limit);
+  const scored = papers.map((c) => {
+    const t = (c.title + " " + (c.abstract || "")).toLowerCase();
     const score = topicWords.reduce((acc, w) => acc + (t.includes(w) ? 1 : 0), 0);
     return { c, score };
   });
@@ -132,9 +212,10 @@ async function streamRankedPapers(
 
 For each, output an object with keys: title, authors, year, source, brief, url.
 - "source" must be: "${sourceName}"
-- "brief" is a 1–2 sentence plain-English summary inferred from the title (and abstract if available).
-- Preserve title and url EXACTLY as given. Do NOT invent papers, authors, or URLs.
-- If author/year/abstract is missing, leave authors as "Unknown" and year as "n.d."
+- "brief" is a 1–2 sentence plain-English summary inferred from the abstract (if available) or the title.
+- Preserve title, authors, year, and url EXACTLY as given in the input. Do NOT invent or rephrase authors or URLs.
+- ONLY use "Unknown" for authors when the input field is missing or empty. If authors are present in the input, copy them verbatim.
+- ONLY use "n.d." for year when the input field is missing or empty.
 
 Return ONLY a JSON array of 5 objects. No prose, no markdown.`;
 

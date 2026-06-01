@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { findPapers } from "@/lib/api/ts-research";
 import { getTopicsForSource } from "@/lib/sources";
-import { Loader2 } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 export interface Paper {
@@ -177,7 +177,15 @@ export const PaperFinder = ({ sourceId, sourceName, onSelect, onBack }: PaperFin
                   <p className="text-sm text-muted-foreground mb-2">{paper.authors}</p>
                   <p className="text-sm font-body leading-relaxed">{paper.brief}</p>
                   {paper.url && (
-                    <p className="text-xs font-mono text-accent/70 mt-2 truncate">{paper.url}</p>
+                    <a
+                      href={paper.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1 mt-3 text-xs font-mono text-accent hover:underline"
+                    >
+                      View original <ExternalLink className="w-3 h-3" />
+                    </a>
                   )}
                 </div>
               </div>
