@@ -208,7 +208,7 @@ async function streamRankedPapers(
   sourceName: string,
   apiKey: string,
 ): Promise<Response> {
-  const systemPrompt = `You are a Trust & Safety research librarian. From the JSON list of REAL papers below, pick the 5 most relevant to the topic "${topic || "trust and safety"}".
+  const systemPrompt = `You are a research librarian covering online safety, abuse detection, platform integrity, content moderation, fraud, security, and related fields. From the JSON list of REAL papers below, pick the 5 most relevant to the topic "${topic || "online safety and platform integrity"}".
 
 For each, output an object with keys: title, authors, year, source, brief, url.
 - "source" must be: "${sourceName}"
