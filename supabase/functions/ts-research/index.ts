@@ -1,35 +1,270 @@
+// Edge function: ts-research
+// Live paper fetching (arXiv API + Firecrawl), then Gemini-powered ranking/summarization.
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+type FetchConfig =
+  | { type: "arxiv"; categories: string[] }
+  | { type: "rss"; url: string }
+  | { type: "firecrawl"; url: string; limit?: number };
 
+const SOURCE_FETCH: Record<string, FetchConfig> = {
+  jots: { type: "firecrawl", url: "https://tsjournal.org/index.php/jots/issue/archive", limit: 20 },
+  tspa: { type: "firecrawl", url: "https://www.tspa.org/library/", limit: 20 },
+  arxiv: { type: "arxiv", categories: ["cs.CY", "cs.HC", "cs.CR"] },
+  stanford: { type: "firecrawl", url: "https://cyber.fsi.stanford.edu/io/publications", limit: 20 },
+  berkman: { type: "firecrawl", url: "https://cyber.harvard.edu/publications", limit: 20 },
+  cltc: { type: "firecrawl", url: "https://cltc.berkeley.edu/publications/", limit: 20 },
+  csmap: { type: "firecrawl", url: "https://csmapnyu.org/research/publications", limit: 20 },
+  tsrc: { type: "firecrawl", url: "https://tsrc.stanford.edu/", limit: 20 },
+  facct: { type: "firecrawl", url: "https://facctconference.org/2024/acceptedpapers", limit: 30 },
+  usenix: { type: "firecrawl", url: "https://www.usenix.org/conference/usenixsecurity24/technical-sessions", limit: 30 },
+  "ieee-sp": { type: "firecrawl", url: "https://www.ieee-security.org/TC/SP2024/program-papers.html", limit: 30 },
+  ccs: { type: "firecrawl", url: "https://www.sigsac.org/ccs/CCS2024/program/accepted-papers.html", limit: 30 },
+  ndss: { type: "firecrawl", url: "https://www.ndss-symposium.org/ndss2024/accepted-papers/", limit: 30 },
+  "bot-research": { type: "firecrawl", url: "https://blog.cloudflare.com/tag/bots/", limit: 20 },
+};
+
+type RawPaper = {
+  title: string;
+  authors?: string;
+  year?: string | number;
+  url?: string;
+  abstract?: string;
+};
+
+// ───────── arXiv ─────────
+async function fetchArxiv(categories: string[], topic: string): Promise<RawPaper[]> {
+  const catQuery = categories.map((c) => `cat:${c}`).join("+OR+");
+  const topicQuery = topic ? `+AND+all:${encodeURIComponent(`"${topic}"`)}` : "";
+  const url = `http://export.arxiv.org/api/query?search_query=(${catQuery})${topicQuery}&sortBy=submittedDate&sortOrder=descending&max_results=20`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`arXiv fetch failed: ${resp.status}`);
+  const xml = await resp.text();
+
+  // Simple regex-based Atom parsing — arXiv format is stable.
+  const entries = xml.split("<entry>").slice(1);
+  return entries.slice(0, 20).map((entry): RawPaper => {
+    const pick = (tag: string) => {
+      const m = entry.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
+      return m ? m[1].trim() : "";
+    };
+    const title = pick("title").replace(/\s+/g, " ");
+    const summary = pick("summary").replace(/\s+/g, " ");
+    const published = pick("published");
+    const year = published.slice(0, 4);
+    const linkMatch = entry.match(/<id>([\s\S]*?)<\/id>/);
+    const url = linkMatch ? linkMatch[1].trim() : "";
+    const authors = [...entry.matchAll(/<name>([\s\S]*?)<\/name>/g)]
+      .map((m) => m[1].trim())
+      .slice(0, 5)
+      .join(", ");
+    return { title, authors, year, url, abstract: summary };
+  });
+}
+
+// ───────── Firecrawl ─────────
+async function fetchFirecrawl(targetUrl: string, topic: string, limit = 20): Promise<RawPaper[]> {
+  const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
+  if (!apiKey) {
+    throw new Error("FIRECRAWL_NOT_CONFIGURED");
+  }
+
+  // Scrape the publications index page as markdown + links
+  const resp = await fetch("https://api.firecrawl.dev/v2/scrape", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      url: targetUrl,
+      formats: ["markdown", "links"],
+      onlyMainContent: true,
+    }),
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`Firecrawl scrape failed: ${resp.status} ${t}`);
+  }
+
+  const data = await resp.json();
+  const markdown: string = data.data?.markdown || data.markdown || "";
+  const links: string[] = data.data?.links || data.links || [];
+
+  // Extract candidate paper-like lines: markdown links [Title](url)
+  const linkRe = /\[([^\]]{15,300})\]\((https?:\/\/[^\s)]+)\)/g;
+  const candidates: RawPaper[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = linkRe.exec(markdown)) !== null) {
+    const title = m[1].trim();
+    const url = m[2].trim();
+    if (/^(home|about|contact|menu|skip|search|login|sign)/i.test(title)) continue;
+    candidates.push({ title, url });
+    if (candidates.length >= limit * 2) break;
+  }
+
+  // If topic given, prefer ones containing topic words; otherwise keep first N
+  const topicWords = topic.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const scored = candidates.map((c) => {
+    const t = c.title.toLowerCase();
+    const score = topicWords.reduce((acc, w) => acc + (t.includes(w) ? 1 : 0), 0);
+    return { c, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((s) => s.c);
+}
+
+// ───────── Gemini ranking + summarization (streamed JSON) ─────────
+async function streamRankedPapers(
+  rawPapers: RawPaper[],
+  topic: string,
+  sourceName: string,
+  apiKey: string,
+): Promise<Response> {
+  const systemPrompt = `You are a Trust & Safety research librarian. From the JSON list of REAL papers below, pick the 5 most relevant to the topic "${topic || "trust and safety"}".
+
+For each, output an object with keys: title, authors, year, source, brief, url.
+- "source" must be: "${sourceName}"
+- "brief" is a 1–2 sentence plain-English summary inferred from the title (and abstract if available).
+- Preserve title and url EXACTLY as given. Do NOT invent papers, authors, or URLs.
+- If author/year/abstract is missing, leave authors as "Unknown" and year as "n.d."
+
+Return ONLY a JSON array of 5 objects. No prose, no markdown.`;
+
+  const userPrompt = `Topic: ${topic}\n\nReal papers:\n${JSON.stringify(rawPapers.slice(0, 20), null, 2)}`;
+
+  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again shortly." }), {
+        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (response.status === 402) {
+      return new Response(JSON.stringify({ error: "Credits exhausted. Please add funds." }), {
+        status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const t = await response.text();
+    console.error("AI gateway error:", response.status, t);
+    throw new Error("AI gateway error");
+  }
+
+  return new Response(response.body, {
+    headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+  });
+}
+
+// ───────── Helper: stream a static JSON array back as SSE deltas ─────────
+function streamStaticJson(papers: RawPaper[], sourceName: string): Response {
+  const json = JSON.stringify(
+    papers.slice(0, 5).map((p) => ({
+      title: p.title,
+      authors: p.authors || "Unknown",
+      year: p.year || "n.d.",
+      source: sourceName,
+      brief: p.abstract ? p.abstract.slice(0, 240) : "Live result from " + sourceName + ".",
+      url: p.url || "",
+    })),
+  );
+  const sse =
+    `data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n` +
+    `data: [DONE]\n\n`;
+  return new Response(sse, {
+    headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+  });
+}
+
+// ───────── Server ─────────
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { action, source, topic, paperTitle, paperSummary, userThoughts } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) throw new Error('LOVABLE_API_KEY is not configured');
+    const body = await req.json();
+    const { action } = body;
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
-    let systemPrompt = '';
-    let userPrompt = '';
+    // ── find_papers: live fetch + Gemini rank ──
+    if (action === "find_papers") {
+      const { sourceId, source: sourceName, topic } = body as {
+        sourceId?: string; source?: string; topic?: string;
+      };
+      if (!sourceId || !sourceName) {
+        return new Response(JSON.stringify({ error: "sourceId and source are required" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const cfg = SOURCE_FETCH[sourceId];
+      if (!cfg) {
+        return new Response(JSON.stringify({ error: `Unknown source: ${sourceId}` }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
-    if (action === 'find_papers') {
-      systemPrompt = `You are a Trust & Safety research expert. Find 3 real, notable academic papers related to "${topic || 'trust and safety'}" from the source category: "${source}". 
-For each paper, provide:
-- title (real paper title)
-- authors
-- year
-- source (journal/conference)
-- brief (2-sentence summary of the key finding)
+      let raw: RawPaper[] = [];
+      try {
+        if (cfg.type === "arxiv") {
+          raw = await fetchArxiv(cfg.categories, topic || "");
+        } else if (cfg.type === "firecrawl") {
+          raw = await fetchFirecrawl(cfg.url, topic || "", cfg.limit);
+        } else if (cfg.type === "rss") {
+          // Not yet wired; fall through to empty
+          raw = [];
+        }
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        console.error("fetch error:", msg);
+        if (msg === "FIRECRAWL_NOT_CONFIGURED") {
+          return new Response(
+            JSON.stringify({
+              error:
+                "Live fetching for this source requires the Firecrawl connector. Connect Firecrawl in Lovable Cloud, or pick arXiv as the source.",
+            }),
+            { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        // Return empty results so UI shows graceful empty state
+        return streamStaticJson([], sourceName);
+      }
 
-Return ONLY valid JSON array with objects having keys: title, authors, year, source, brief. No markdown, no explanation.`;
-      userPrompt = `Find 3 papers about trust and safety from: ${source}. ${topic ? `Focus on: ${topic}` : ''}`;
-    } else if (action === 'review_paper') {
+      if (raw.length === 0) {
+        return streamStaticJson([], sourceName);
+      }
+
+      return await streamRankedPapers(raw, topic || "", sourceName, LOVABLE_API_KEY);
+    }
+
+    // ── review_paper / generate_article (unchanged) ──
+    const { paperTitle, paperSummary, userThoughts } = body;
+    let systemPrompt = "";
+    let userPrompt = "";
+
+    if (action === "review_paper") {
       systemPrompt = `You are a Trust & Safety research analyst. Provide a thorough but accessible review of this paper. Structure your review with these sections:
 ## Overview
 A clear summary of what this paper is about and why it matters.
@@ -51,7 +286,7 @@ One powerful insight from the paper.
 
 Write in an engaging, editorial tone. Use markdown formatting.`;
       userPrompt = `Review this trust & safety paper: "${paperTitle}"`;
-    } else if (action === 'generate_article') {
+    } else if (action === "generate_article") {
       systemPrompt = `You are a senior Trust & Safety journalist and practitioner. Write a compelling, practical article (800-1200 words) that takes the theory from an academic paper and applies it to a real-world use case.
 
 The article should:
@@ -73,20 +308,20 @@ Reader's thoughts and reactions: ${userThoughts}
 
 Write a practical use-case article applying this paper's theory.`;
     } else {
-      throw new Error('Invalid action');
+      throw new Error("Invalid action");
     }
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
+        model: "google/gemini-3-flash-preview",
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
         ],
         stream: true,
       }),
@@ -94,27 +329,27 @@ Write a practical use-case article applying this paper's theory.`;
 
     if (!response.ok) {
       if (response.status === 429) {
-        return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again shortly.' }), {
-          status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again shortly." }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       if (response.status === 402) {
-        return new Response(JSON.stringify({ error: 'Credits exhausted. Please add funds.' }), {
-          status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        return new Response(JSON.stringify({ error: "Credits exhausted. Please add funds." }), {
+          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       const t = await response.text();
-      console.error('AI gateway error:', response.status, t);
-      throw new Error('AI gateway error');
+      console.error("AI gateway error:", response.status, t);
+      throw new Error("AI gateway error");
     }
 
     return new Response(response.body, {
-      headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (e) {
-    console.error('ts-research error:', e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Unknown error' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    console.error("ts-research error:", e);
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
