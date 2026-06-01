@@ -81,13 +81,18 @@ export const PaperReview = ({ paper, initialReview = "", onReviewChange, onConti
         )}
       </div>
 
-      <div className="flex justify-between mt-8">
+      <div className="flex justify-between items-center mt-8">
         <Button variant="editorial-outline" onClick={onBack}>
           ← Back
         </Button>
-        <Button variant="editorial" onClick={() => onContinue(review)} disabled={loading}>
-          Share Your Thoughts →
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="editorial-outline" onClick={runReview} disabled={loading}>
+            Regenerate
+          </Button>
+          <Button variant="editorial" onClick={() => onContinue(review)} disabled={loading || !review}>
+            Share Your Thoughts →
+          </Button>
+        </div>
       </div>
     </motion.div>
   );
