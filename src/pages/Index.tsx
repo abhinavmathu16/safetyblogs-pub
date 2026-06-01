@@ -33,7 +33,7 @@ const Index = () => {
             className="text-center"
           >
             <h1 className="text-4xl md:text-5xl font-display font-extrabold tracking-tight">
-              T&S Research <span className="text-accent">Companion</span>
+              Platform Integrity Research <span className="text-accent">Companion</span>
             </h1>
             <p className="text-muted-foreground font-body mt-2 text-lg">
               Discover papers. Form opinions. Generate practical articles.
