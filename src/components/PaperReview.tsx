@@ -9,26 +9,36 @@ import type { Paper } from "@/components/PaperFinder";
 
 interface PaperReviewProps {
   paper: Paper;
+  initialReview?: string;
+  onReviewChange?: (review: string) => void;
   onContinue: (review: string) => void;
   onBack: () => void;
 }
 
-export const PaperReview = ({ paper, onContinue, onBack }: PaperReviewProps) => {
-  const [review, setReview] = useState("");
-  const [loading, setLoading] = useState(true);
+export const PaperReview = ({ paper, initialReview = "", onReviewChange, onContinue, onBack }: PaperReviewProps) => {
+  const [review, setReview] = useState(initialReview);
+  const [loading, setLoading] = useState(!initialReview);
 
-  useEffect(() => {
+  const runReview = () => {
+    setReview("");
+    setLoading(true);
     let accumulated = "";
     reviewPaper(paper.title, {
       onDelta: (text) => {
         accumulated += text;
         setReview(accumulated);
+        onReviewChange?.(accumulated);
       },
       onDone: () => setLoading(false),
     }).catch((e) => {
       toast.error(e.message || "Failed to review paper");
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    if (!initialReview) runReview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paper.title]);
 
   return (
@@ -71,13 +81,18 @@ export const PaperReview = ({ paper, onContinue, onBack }: PaperReviewProps) => 
         )}
       </div>
 
-      <div className="flex justify-between mt-8">
+      <div className="flex justify-between items-center mt-8">
         <Button variant="editorial-outline" onClick={onBack}>
           ← Back
         </Button>
-        <Button variant="editorial" onClick={() => onContinue(review)} disabled={loading}>
-          Share Your Thoughts →
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="editorial-outline" onClick={runReview} disabled={loading}>
+            Regenerate
+          </Button>
+          <Button variant="editorial" onClick={() => onContinue(review)} disabled={loading || !review}>
+            Share Your Thoughts →
+          </Button>
+        </div>
       </div>
     </motion.div>
   );

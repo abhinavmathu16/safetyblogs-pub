@@ -1,19 +1,26 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Link } from "react-router-dom";
 import { StepIndicator } from "@/components/StepIndicator";
 import { SourceSelect } from "@/components/SourceSelect";
 import { PaperFinder, type Paper } from "@/components/PaperFinder";
 import { PaperReview } from "@/components/PaperReview";
 import { UserThoughts } from "@/components/UserThoughts";
 import { ArticleGenerator } from "@/components/ArticleGenerator";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
+import { LibraryBig, LogOut, LogIn } from "lucide-react";
 
 const Index = () => {
+  const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [sourceId, setSourceId] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
   const [review, setReview] = useState("");
   const [userThoughts, setUserThoughts] = useState("");
+  const [article, setArticle] = useState("");
 
   const handleRestart = () => {
     setStep(0);
@@ -22,6 +29,7 @@ const Index = () => {
     setSelectedPaper(null);
     setReview("");
     setUserThoughts("");
+    setArticle("");
   };
 
   return (
@@ -29,6 +37,29 @@ const Index = () => {
       {/* Header */}
       <header className="border-b border-border">
         <div className="container max-w-5xl mx-auto px-4 py-6">
+          <div className="flex items-center justify-end gap-2 mb-4">
+            <Link to="/library">
+              <Button variant="editorial-outline" size="sm" className="gap-2">
+                <LibraryBig className="w-4 h-4" /> My Library
+              </Button>
+            </Link>
+            {user ? (
+              <Button
+                variant="editorial-outline"
+                size="sm"
+                onClick={() => supabase.auth.signOut()}
+                className="gap-2"
+              >
+                <LogOut className="w-4 h-4" /> Sign out
+              </Button>
+            ) : (
+              <Link to="/auth">
+                <Button variant="editorial-outline" size="sm" className="gap-2">
+                  <LogIn className="w-4 h-4" /> Sign in
+                </Button>
+              </Link>
+            )}
+          </div>
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -65,6 +96,11 @@ const Index = () => {
               sourceId={sourceId}
               sourceName={sourceName}
               onSelect={(paper) => {
+                if (paper.title !== selectedPaper?.title) {
+                  setReview("");
+                  setArticle("");
+                  setUserThoughts("");
+                }
                 setSelectedPaper(paper);
                 setStep(2);
               }}
@@ -72,11 +108,12 @@ const Index = () => {
             />
           )}
 
-
           {step === 2 && selectedPaper && (
             <PaperReview
               key="review"
               paper={selectedPaper}
+              initialReview={review}
+              onReviewChange={setReview}
               onContinue={(rev) => {
                 setReview(rev);
                 setStep(3);
@@ -89,6 +126,8 @@ const Index = () => {
             <UserThoughts
               key="thoughts"
               paper={selectedPaper}
+              review={review}
+              initialThoughts={userThoughts}
               onContinue={(thoughts) => {
                 setUserThoughts(thoughts);
                 setStep(4);
@@ -101,8 +140,11 @@ const Index = () => {
             <ArticleGenerator
               key="article"
               paper={selectedPaper}
+              sourceName={sourceName}
               review={review}
               userThoughts={userThoughts}
+              initialArticle={article}
+              onArticleChange={setArticle}
               onRestart={handleRestart}
             />
           )}
