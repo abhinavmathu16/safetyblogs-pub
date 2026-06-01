@@ -61,11 +61,12 @@ async function streamFromFunction(body: Record<string, unknown>, { onDelta, onDo
 }
 
 export async function findPapers(
-  source: string,
+  sourceId: string,
+  sourceName: string,
   topic: string,
   callbacks: StreamCallbacks
 ) {
-  return streamFromFunction({ action: 'find_papers', source, topic }, callbacks);
+  return streamFromFunction({ action: 'find_papers', sourceId, source: sourceName, topic }, callbacks);
 }
 
 export async function reviewPaper(

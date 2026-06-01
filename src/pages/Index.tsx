@@ -9,6 +9,7 @@ import { ArticleGenerator } from "@/components/ArticleGenerator";
 
 const Index = () => {
   const [step, setStep] = useState(0);
+  const [sourceId, setSourceId] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
   const [review, setReview] = useState("");
@@ -16,6 +17,7 @@ const Index = () => {
 
   const handleRestart = () => {
     setStep(0);
+    setSourceId("");
     setSourceName("");
     setSelectedPaper(null);
     setReview("");
@@ -50,6 +52,7 @@ const Index = () => {
             <SourceSelect
               key="source"
               onSelect={(id, name) => {
+                setSourceId(id);
                 setSourceName(name);
                 setStep(1);
               }}
@@ -59,6 +62,7 @@ const Index = () => {
           {step === 1 && (
             <PaperFinder
               key="finder"
+              sourceId={sourceId}
               sourceName={sourceName}
               onSelect={(paper) => {
                 setSelectedPaper(paper);
@@ -67,6 +71,7 @@ const Index = () => {
               onBack={() => setStep(0)}
             />
           )}
+
 
           {step === 2 && selectedPaper && (
             <PaperReview
