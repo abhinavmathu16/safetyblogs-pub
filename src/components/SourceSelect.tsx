@@ -15,7 +15,7 @@ export const SourceSelect = ({ onSelect }: SourceSelectProps) => {
       <div className="text-center mb-8">
         <h2 className="text-3xl font-display font-bold mb-2">Choose Your Source</h2>
         <p className="text-muted-foreground font-body">
-          Select a research source to discover trust & safety papers.
+          Select a research source to discover papers on safety, abuse, integrity, and security.
         </p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
